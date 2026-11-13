@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CAMSTREAM-01 // VIDEO INGEST NODE</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-canvas: #F4F4F2;
+            --bg-panel: #FFFFFF;
+            --bg-subtle: #EAEAE6;
+            --border-line: #18181B;
+            --border-muted: #D4D4D0;
+            --text-main: #111111;
+            --text-muted: #52525B;
+            --accent-signal: #D9381E;
+            --accent-live: #15803D;
+        }
+        body {
+            font-family: 'IBM Plex Sans', sans-serif;
+            background-color: var(--bg-canvas);
+            color: var(--text-main);
+        }
+        .font-mono, code, pre {
+            font-family: 'IBM Plex Mono', monospace;
+        }
+        .panel-box {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-line);
+        }
+        .sub-box {
+            background: var(--bg-subtle);
+            border: 1px solid var(--border-muted);
+        }
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            background: #D4D4D0;
+            height: 4px;
+            border-radius: 0;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 14px;
+            height: 18px;
+            background: #111111;
+            border: 1px solid #111111;
+            cursor: pointer;
+        }
+        .grid-reticle {
+            background-image:
+                linear-gradient(to right, rgba(217, 56, 30, 0.35) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(217, 56, 30, 0.35) 1px, transparent 1px);
+            background-size: 10% 10%;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <!-- Top Utility Bar -->
+    <header class="bg-white border-b border-zinc-900 px-4 sm:px-6 py-3">
+        <div class="max-w-[1400px] mx-auto flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center gap-4">
+                <div class="bg-zinc-900 text-white font-mono text-xs font-semibold px-2.5 py-1.5 tracking-wider">
+                    NODE // 01
+                </div>
+                <div>
+                    <div class="flex items-center gap-2.5">
+                        <h1 class="text-sm font-bold tracking-tight uppercase">CamStream Video Ingest</h1>
+                        <span class="text-xs font-mono text-zinc-500 border border-zinc-300 px-1.5 py-0.5">/dev/video0</span>
+                    </div>
+                    <p class="text-xs text-zinc-500 font-mono mt-0.5" id="host-info">HOST: 192.168.1.100:8000 • V4L2 MJPEG</p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-3">
+                <div class="flex items-center gap-2 border border-zinc-900 px-3 py-1 bg-[#F4F4F2]">
+                    <span id="status-indicator" class="w-2 h-2 bg-emerald-700 inline-block"></span>
+                    <span id="status-label" class="font-mono text-xs font-semibold tracking-wide">SIGNAL: LIVE</span>
+                </div>
+                <span class="font-mono text-xs text-zinc-500 hidden sm:inline">REV 1.0</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="flex-1 max-w-[1400px] w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+
+        <!-- Left Area: Video Viewport & Client Integration (8 Cols) -->
+        <section class="lg:col-span-8 space-y-5">
+
+            <!-- Video Monitor Frame -->
+            <div class="panel-box">
+                <!-- Monitor Top Strip -->
+                <div class="border-b border-zinc-900 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 bg-[#F9F9F8]">
+                    <div class="flex items-center gap-3 font-mono text-xs">
+                        <span class="font-semibold text-zinc-900">CH-01</span>
+                        <span class="text-zinc-400">|</span>
+                        <span id="spec-readout" class="text-zinc-700">1280×720 @ 30 FPS</span>
+                        <span class="text-zinc-400">|</span>
+                        <span class="text-zinc-700">Q:<span id="hud-q">80</span>%</span>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <button onclick="toggleReticle()" id="btn-reticle" class="font-mono text-xs px-2.5 py-1 border border-zinc-400 bg-white hover:border-zinc-900 transition">
+                            [GRID: OFF]
+                        </button>
+                        <button onclick="togglePreview()" id="btn-pause" class="font-mono text-xs px-2.5 py-1 border border-zinc-400 bg-white hover:border-zinc-900 transition">
+                            [PAUSE]
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 16:9 Viewport -->
+                <div class="relative aspect-video bg-zinc-950 overflow-hidden select-none">
+                    <!-- Real Backend Stream Image -->
+                    <img id="backend-stream" src="/video_feed" alt="" class="w-full h-full object-contain" onerror="handleStreamError()" onload="handleStreamLoad()" />
+
+                    <!-- Fallback Calibration Canvas (Active when opened standalone without Python backend) -->
+                    <canvas id="calibration-canvas" width="1280" height="720" class="hidden w-full h-full object-cover"></canvas>
+
+                    <!-- Optical Grid & Center Crosshair -->
+                    <div id="reticle-overlay" class="hidden absolute inset-0 grid-reticle pointer-events-none">
+                        <div class="absolute inset-x-0 top-1/2 border-t border-red-600/60"></div>
+                        <div class="absolute inset-y-0 left-1/2 border-l border-red-600/60"></div>
+                    </div>
+
+                    <!-- Paused Cover -->
+                    <div id="pause-screen" class="hidden absolute inset-0 bg-zinc-950/90 flex flex-col items-center justify-center text-white font-mono">
+                        <div class="border border-zinc-600 px-4 py-2 text-xs tracking-widest uppercase">
+                            Preview Paused — Stream Output Active
+                        </div>
+                    </div>
+
+                    <!-- Minimalist Broadcast Timecode -->
+                    <div class="absolute top-3 left-3 bg-zinc-950/85 text-white font-mono text-[11px] px-2 py-0.5 border border-zinc-700">
+                        <span id="tc-mode" class="text-emerald-400">LIVE</span> <span id="timecode">00:00:00:00</span>
+                    </div>
+                </div>
+
+                <!-- Monitor Bottom Action Bar -->
+                <div class="border-t border-zinc-900 px-3.5 py-2.5 bg-white flex flex-wrap items-center justify-between gap-3">
+                    <span class="text-xs text-zinc-600 font-mono">
+                        Endpoint aktif untuk multi-client OpenCV / HTTP.
+                    </span>
+                    <button onclick="captureFrame()" class="font-mono text-xs font-semibold uppercase tracking-wide bg-zinc-900 text-white px-3.5 py-1.5 hover:bg-zinc-800 transition">
+                        Capture Frame (.JPG)
+                    </button>
+                </div>
+            </div>
+
+            <!-- Client Integration Box -->
+            <div class="panel-box">
+                <div class="border-b border-zinc-900 px-3.5 py-2 bg-[#F9F9F8] flex items-center justify-between">
+                    <div class="flex items-center gap-4 font-mono text-xs">
+                        <span class="font-semibold text-zinc-900 uppercase">Client Access</span>
+                        <div class="flex border border-zinc-400 bg-white">
+                            <button onclick="switchTab('python')" id="tab-python" class="px-2.5 py-0.5 bg-zinc-900 text-white">Python / OpenCV</button>
+                            <button onclick="switchTab('curl')" id="tab-curl" class="px-2.5 py-0.5 text-zinc-700 hover:bg-zinc-100">cURL / FFmpeg</button>
+                        </div>
+                    </div>
+                    <button onclick="copyActiveCode(this)" class="font-mono text-xs underline underline-offset-4 hover:text-red-600">
+                        Copy Snippet
+                    </button>
+                </div>
+                <pre id="code-display" class="p-4 text-xs font-mono text-zinc-800 bg-white overflow-x-auto leading-relaxed"></pre>
+            </div>
+
+        </section>
+
+        <!-- Right Area: Endpoints & Hardware Tuning (4 Cols) -->
+        <aside class="lg:col-span-4 space-y-5">
+
+            <!-- Telemetry Metrics Grid -->
+            <div class="grid grid-cols-2 border border-zinc-900 bg-white">
+                <div class="p-3.5 border-r border-zinc-900">
+                    <div class="font-mono text-[11px] uppercase text-zinc-500">Connected Clients</div>
+                    <div class="font-mono text-2xl font-semibold mt-1" id="metric-clients">0</div>
+                </div>
+                <div class="p-3.5">
+                    <div class="font-mono text-[11px] uppercase text-zinc-500">Est. Bitrate</div>
+                    <div class="font-mono text-2xl font-semibold mt-1" id="metric-bitrate">1.8 <span class="text-xs font-normal text-zinc-500">MB/s</span></div>
+                </div>
+            </div>
+
+            <!-- Direct Endpoints -->
+            <div class="panel-box p-4 space-y-3.5">
+                <div class="font-mono text-xs font-semibold uppercase tracking-wider border-b border-zinc-300 pb-2">
+                    Stream Endpoints
+                </div>
+
+                <div>
+                    <div class="flex justify-between font-mono text-[11px] text-zinc-600 mb-1">
+                        <span>MJPEG CONTINUOUS STREAM</span>
+                        <span>GET</span>
+                    </div>
+                    <div class="flex">
+                        <input id="ep-feed" type="text" readonly class="w-full font-mono text-xs px-2.5 py-1.5 sub-box text-zinc-900 focus:outline-none">
+                        <button onclick="copyField('ep-feed', this)" class="font-mono text-xs px-3 border-y border-r border-zinc-900 bg-white hover:bg-zinc-900 hover:text-white transition">
+                            COPY
+                        </button>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="flex justify-between font-mono text-[11px] text-zinc-600 mb-1">
+                        <span>SINGLE JPEG SNAPSHOT</span>
+                        <span>GET</span>
+                    </div>
+                    <div class="flex">
+                        <input id="ep-snap" type="text" readonly class="w-full font-mono text-xs px-2.5 py-1.5 sub-box text-zinc-900 focus:outline-none">
+                        <button onclick="copyField('ep-snap', this)" class="font-mono text-xs px-3 border-y border-r border-zinc-900 bg-white hover:bg-zinc-900 hover:text-white transition">
+                            COPY
+                        </button>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="flex justify-between font-mono text-[11px] text-zinc-600 mb-1">
+                        <span>TELEMETRY JSON</span>
+                        <span>GET</span>
+                    </div>
+                    <div class="flex">
+                        <input id="ep-stat" type="text" readonly class="w-full font-mono text-xs px-2.5 py-1.5 sub-box text-zinc-900 focus:outline-none">
+                        <button onclick="copyField('ep-stat', this)" class="font-mono text-xs px-3 border-y border-r border-zinc-900 bg-white hover:bg-zinc-900 hover:text-white transition">
+                            COPY
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Encoder & Sensor Tuning -->
+            <div class="panel-box p-4 space-y-4">
+                <div class="flex items-center justify-between border-b border-zinc-300 pb-2">
+                    <span class="font-mono text-xs font-semibold uppercase tracking-wider">Stream Parameters</span>
+                    <span class="font-mono text-[11px] text-zinc-500">POST /config</span>
+                </div>
+
+                <div>
+                    <label class="block font-mono text-[11px] uppercase text-zinc-600 mb-1.5">Output Resolution</label>
+                    <select id="ctrl-res" onchange="recalcBitrate()" class="w-full font-mono text-xs px-2.5 py-2 bg-white border border-zinc-900 focus:outline-none">
+                        <option value="1280x720" selected>1280 × 720 (HD 16:9)</option>
+                        <option value="1920x1080">1920 × 1080 (FHD 16:9)</option>
+                        <option value="640x480">640 × 480 (VGA 4:3)</option>
+                    </select>
+                </div>
+
+                <div>
+                    <div class="flex justify-between font-mono text-xs mb-1.5">
+                        <span class="text-zinc-600 uppercase text-[11px]">JPEG Quality</span>
+                        <span id="lbl-quality" class="font-semibold">80%</span>
+                    </div>
+                    <input id="ctrl-quality" type="range" min="30" max="100" value="80" oninput="onParamSlide()" class="w-full">
+                </div>
+
+                <div>
+                    <div class="flex justify-between font-mono text-xs mb-1.5">
+                        <span class="text-zinc-600 uppercase text-[11px]">Target Frame Rate</span>
+                        <span id="lbl-fps" class="font-semibold">30 FPS</span>
+                    </div>
+                    <input id="ctrl-fps" type="range" min="5" max="60" step="5" value="30" oninput="onParamSlide()" class="w-full">
+                </div>
+
+                <button onclick="pushConfig(this)" class="w-full font-mono text-xs font-semibold uppercase tracking-wider py-2.5 bg-zinc-900 text-white hover:bg-red-700 transition">
+                    Apply Parameters
+                </button>
+            </div>
+
+        </aside>
+    </main>
+
+    <script>
+        const originUrl = window.location.origin.startsWith('http') ? window.location.origin : 'http://192.168.1.100:8000';
+        let isPaused = false;
+        let isBackendLive = false;
+        let activeTab = 'python';
+        let frameCounter = 0;
+
+        document.getElementById('host-info').innerText = `HOST: ${originUrl.replace(/^https?:\/\//, '')} • V4L2 MJPEG`;
+        document.getElementById('ep-feed').value = `${originUrl}/video_feed`;
+        document.getElementById('ep-snap').value = `${originUrl}/snapshot`;
+        document.getElementById('ep-stat').value = `${originUrl}/status`;
+
+        const snippets = {
+            python: `import cv2
+
+cap = cv2.VideoCapture("${originUrl}/video_feed")
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+    # Proses frame di sini
+    cv2.imshow("Stream", frame)
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        break`,
+            curl: `# Ambil 1 frame snapshot terbaru
+curl -s "${originUrl}/snapshot" -o frame.jpg
+
+# Cek telemetri & jumlah client aktif
+curl -s "${originUrl}/status"
+
+# Rekam stream ke file MP4 via FFmpeg
+ffmpeg -i "${originUrl}/video_feed" -c:v libx264 output.mp4`
+        };
+
+        function switchTab(tab) {
+            activeTab = tab;
+            document.getElementById('code-display').innerText = snippets[tab];
+            document.getElementById('tab-python').className = tab === 'python' ? 'px-2.5 py-0.5 bg-zinc-900 text-white' : 'px-2.5 py-0.5 text-zinc-700 hover:bg-zinc-100';
+            document.getElementById('tab-curl').className = tab === 'curl' ? 'px-2.5 py-0.5 bg-zinc-900 text-white' : 'px-2.5 py-0.5 text-zinc-700 hover:bg-zinc-100';
+        }
+        switchTab('python');
+
+        // Fallback SMPTE Test Pattern Canvas jika dibuka lokal tanpa FastAPI backend
+        const canvas = document.getElementById('calibration-canvas');
+        const ctx = canvas.getContext('2d');
+
+        function handleStreamLoad() {
+            isBackendLive = true;
+            document.getElementById('backend-stream').classList.remove('hidden');
+            canvas.classList.add('hidden');
+            document.getElementById('tc-mode').innerText = 'LIVE';
+            document.getElementById('tc-mode').className = 'text-emerald-400';
+        }
+
+        function handleStreamError() {
+            isBackendLive = false;
+            document.getElementById('backend-stream').classList.add('hidden');
+            canvas.classList.remove('hidden');
+            document.getElementById('tc-mode').innerText = 'TEST PATTERN';
+            document.getElementById('tc-mode').className = 'text-amber-400';
+        }
+
+        function renderTestPattern() {
+            if (!isBackendLive && !isPaused) {
+                frameCounter++;
+                const w = canvas.width;
+                const h = canvas.height;
+                const bars = ['#E4E4E7', '#EAB308', '#06B6D4', '#22C55E', '#D946EF', '#EF4444', '#2563EB'];
+                const barW = w / bars.length;
+
+                bars.forEach((color, idx) => {
+                    ctx.fillStyle = color;
+                    ctx.fillRect(idx * barW, 0, barW + 1, h * 0.72);
+                });
+
+                ctx.fillStyle = '#18181B';
+                ctx.fillRect(0, h * 0.72, w, h * 0.28);
+
+                const scanX = (frameCounter * 8) % w;
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(scanX, h * 0.72, 6, h * 0.28);
+
+                ctx.fillStyle = '#FFFFFF';
+                ctx.font = '600 22px "IBM Plex Mono", monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText('NO BACKEND SIGNAL — SMPTE CALIBRATION SIGNAL', w / 2, h * 0.84);
+                ctx.fillStyle = '#A1A1AA';
+                ctx.font = '15px "IBM Plex Mono", monospace';
+                ctx.fillText('Jalankan FastAPI / Docker untuk menampilkan umpan kamera asli', w / 2, h * 0.90);
+            }
+            requestAnimationFrame(renderTestPattern);
+        }
+        renderTestPattern();
+
+        setInterval(() => {
+            const d = new Date();
+            const ff = String(Math.floor(d.getMilliseconds() / 33)).padStart(2, '0');
+            document.getElementById('timecode').innerText = `${d.toTimeString().split(' ')[0]}:${ff}`;
+        }, 33);
+
+        function onParamSlide() {
+            const q = document.getElementById('ctrl-quality').value;
+            const fps = document.getElementById('ctrl-fps').value;
+            document.getElementById('lbl-quality').innerText = `${q}%`;
+            document.getElementById('lbl-fps').innerText = `${fps} FPS`;
+            document.getElementById('hud-q').innerText = q;
+            recalcBitrate();
+        }
+
+        function recalcBitrate() {
+            const res = document.getElementById('ctrl-res').value;
+            const q = Number(document.getElementById('ctrl-quality').value);
+            const fps = Number(document.getElementById('ctrl-fps').value);
+            const [w, h] = res.split('x').map(Number);
+            const pixels = (w * h) / (1280 * 720);
+            const mbps = (pixels * (q / 80) * (fps / 30) * 1.8).toFixed(1);
+            document.getElementById('metric-bitrate').innerHTML = `${mbps} <span class="text-xs font-normal text-zinc-500">MB/s</span>`;
+        }
+
+        function toggleReticle() {
+            const el = document.getElementById('reticle-overlay');
+            const btn = document.getElementById('btn-reticle');
+            const hidden = el.classList.toggle('hidden');
+            btn.innerText = hidden ? '[GRID: OFF]' : '[GRID: ON]';
+            btn.classList.toggle('border-zinc-900', !hidden);
+            btn.classList.toggle('font-semibold', !hidden);
+        }
+
+        function togglePreview() {
+            isPaused = !isPaused;
+            const img = document.getElementById('backend-stream');
+            const cover = document.getElementById('pause-screen');
+            const btn = document.getElementById('btn-pause');
+
+            if (isPaused) {
+                if (isBackendLive) img.src = '';
+                cover.classList.remove('hidden');
+                btn.innerText = '[RESUME]';
+                btn.classList.add('bg-zinc-900', 'text-white');
+            } else {
+                if (isBackendLive) img.src = `/video_feed?t=${Date.now()}`;
+                cover.classList.add('hidden');
+                btn.innerText = '[PAUSE]';
+                btn.classList.remove('bg-zinc-900', 'text-white');
+            }
+        }
+
+        async function pushConfig(btn) {
+            const resVal = document.getElementById('ctrl-res').value;
+            const [width, height] = resVal.split('x').map(Number);
+            const fps = Number(document.getElementById('ctrl-fps').value);
+            const quality = Number(document.getElementById('ctrl-quality').value);
+
+            document.getElementById('spec-readout').innerText = `${width}×${height} @ ${fps} FPS`;
+            const orig = btn.innerText;
+            btn.innerText = 'UPDATING...';
+
+            try {
+                const response = await fetch('/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ width, height, fps, quality })
+                });
+                btn.innerText = response.ok ? 'PARAMETERS APPLIED' : 'SAVED (LOCAL)';
+            } catch (e) {
+                btn.innerText = 'SAVED (PREVIEW MODE)';
+            }
+
+            setTimeout(() => { btn.innerText = orig; }, 1400);
+        }
+
+        function captureFrame() {
+            if (isBackendLive) {
+                const a = document.createElement('a');
+                a.href = '/snapshot';
+                a.download = `capture_${Date.now()}.jpg`;
+                a.click();
+            } else {
+                const a = document.createElement('a');
+                a.href = canvas.toDataURL('image/jpeg', 0.92);
+                a.download = `calibration_${Date.now()}.jpg`;
+                a.click();
+            }
+        }
+
+        function copyField(id, btn) {
+            navigator.clipboard.writeText(document.getElementById(id).value);
+            const orig = btn.innerText;
+            btn.innerText = 'OK';
+            setTimeout(() => { btn.innerText = orig; }, 1200);
+        }
+
+        function copyActiveCode(btn) {
+            navigator.clipboard.writeText(snippets[activeTab]);
+            const orig = btn.innerText;
+            btn.innerText = 'Copied';
+            setTimeout(() => { btn.innerText = orig; }, 1200);
+        }
+
+        async function pollStatus(syncInputs = false) {
+            try {
+                const res = await fetch('/status');
+                if (!res.ok) return;
+                const data = await res.json();
+                document.getElementById('metric-clients').innerText = data.active_clients;
+                document.getElementById('spec-readout').innerText = `${data.width}×${data.height} @ ${data.fps} FPS`;
+                document.getElementById('hud-q').innerText = data.quality;
+
+                const online = data.status === 'online';
+                document.getElementById('status-indicator').className = `w-2 h-2 inline-block ${online ? 'bg-emerald-700' : 'bg-red-600'}`;
+                document.getElementById('status-label').innerText = online ? 'SIGNAL: LIVE' : 'SIGNAL: OFFLINE';
+
+                if (syncInputs) {
+                    document.getElementById('ctrl-res').value = `${data.width}x${data.height}`;
+                    document.getElementById('ctrl-quality').value = data.quality;
+                    document.getElementById('ctrl-fps').value = data.fps;
+                    onParamSlide();
+                }
+            } catch (_) {}
+        }
+
+        pollStatus(true);
+        setInterval(() => pollStatus(false), 3000);
+    </script>
+</body>
+</html>

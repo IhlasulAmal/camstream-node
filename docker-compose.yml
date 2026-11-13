@@ -1,0 +1,15 @@
+services:
+  camstream:
+    build: .
+    container_name: camstream-node
+    restart: unless-stopped
+    devices:
+      - ${CAMERA_DEVICE:-/dev/video0}:/dev/video0
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - CAMERA_SOURCE=${CAMERA_SOURCE:-0}
+      - FRAME_WIDTH=${FRAME_WIDTH:-1280}
+      - FRAME_HEIGHT=${FRAME_HEIGHT:-720}
+      - FPS=${FPS:-30}
+      - JPEG_QUALITY=${JPEG_QUALITY:-80}
